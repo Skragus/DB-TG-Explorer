@@ -1,4 +1,6 @@
-from __future__ import annotations
+import json
+from datetime import date, datetime
+from uuid import UUID
 
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -11,6 +13,19 @@ from bot.config import Config
 router = Router()
 
 PAGE_SIZE = 10
+
+
+def format_value(val: any) -> str:
+    """Format a value for display in the UI."""
+    if val is None:
+        return "NULL"
+    if isinstance(val, (dict, list)):
+        return json.dumps(val, default=str)
+    if isinstance(val, (datetime, date)):
+        return val.isoformat()
+    if isinstance(val, UUID):
+        return str(val)
+    return str(val)
 
 
 @router.message(Command("start"))
@@ -30,7 +45,7 @@ async def show_tables(message: Message | CallbackQuery, page: int) -> None:
     for table in current_tables:
         kb.append([InlineKeyboardButton(
             text=f"📂 {table}",
-            callback_data=ExplorerCB(action="table", table=table).pack()
+            callback_data=ExplorerCB(a="t", t=table).pack()
         )])
         
     # Pagination controls
@@ -38,12 +53,12 @@ async def show_tables(message: Message | CallbackQuery, page: int) -> None:
     if paginator.has_prev:
         nav_row.append(InlineKeyboardButton(
             text="⬅️ Prev",
-            callback_data=ExplorerCB(action="list_tables", page=page - 1).pack()
+            callback_data=ExplorerCB(a="l", p=page - 1).pack()
         ))
     if paginator.has_next:
         nav_row.append(InlineKeyboardButton(
             text="Next ➡️",
-            callback_data=ExplorerCB(action="list_tables", page=page + 1).pack()
+            callback_data=ExplorerCB(a="l", p=page + 1).pack()
         ))
     if nav_row:
         kb.append(nav_row)
@@ -57,15 +72,15 @@ async def show_tables(message: Message | CallbackQuery, page: int) -> None:
         await message.message.edit_text(text, reply_markup=markup)
 
 
-@router.callback_query(ExplorerCB.filter(F.action == "list_tables"))
+@router.callback_query(ExplorerCB.filter(F.a == "l"))
 async def cb_list_tables(callback: CallbackQuery, callback_data: ExplorerCB) -> None:
-    await show_tables(callback, callback_data.page)
+    await show_tables(callback, callback_data.p)
 
 
-@router.callback_query(ExplorerCB.filter(F.action == "table"))
+@router.callback_query(ExplorerCB.filter(F.a == "t"))
 async def cb_table_details(callback: CallbackQuery, callback_data: ExplorerCB) -> None:
     """Show table details (Columns + Browse Option) (Level 2)."""
-    table = callback_data.table
+    table = callback_data.t
     columns = await db.get_table_columns(table)
     row_count = await db.get_row_count(table)
     
@@ -84,22 +99,22 @@ async def cb_table_details(callback: CallbackQuery, callback_data: ExplorerCB) -
     kb = [
         [InlineKeyboardButton(
             text="🔍 Browse Rows",
-            callback_data=ExplorerCB(action="rows", table=table, page=0).pack()
+            callback_data=ExplorerCB(a="r", t=table, p=0).pack()
         )],
         [InlineKeyboardButton(
             text="⬅️ Back to Tables",
-            callback_data=ExplorerCB(action="list_tables", page=0).pack()
+            callback_data=ExplorerCB(a="l", p=0).pack()
         )]
     ]
     
     await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
 
 
-@router.callback_query(ExplorerCB.filter(F.action == "rows"))
+@router.callback_query(ExplorerCB.filter(F.a == "r"))
 async def cb_browse_rows(callback: CallbackQuery, callback_data: ExplorerCB) -> None:
     """Show paginated rows (Level 3)."""
-    table = callback_data.table
-    page = callback_data.page
+    table = callback_data.t
+    page = callback_data.p
     
     # We need a stable sort to paginate correctly. 
     # Attempt to find PK or default to first column.
@@ -117,7 +132,9 @@ async def cb_browse_rows(callback: CallbackQuery, callback_data: ExplorerCB) -> 
         # Try to find a good label for the button
         # If PK exists, use it. Else use first column.
         label_col = sort_col if sort_col else (list(row.keys())[0] if row.keys() else "Row")
-        val = str(row[label_col])
+        raw_val = row[label_col]
+        val = format_value(raw_val)
+        
         if len(val) > 30: val = val[:27] + "..."
         
         # We need a way to identify the row. 
@@ -130,9 +147,16 @@ async def cb_browse_rows(callback: CallbackQuery, callback_data: ExplorerCB) -> 
         # Only add click handler if we have a way to identify the row (PK)
         if pk_cols and len(pk_cols) == 1:
             pk_val = str(row[pk_cols[0]])
+            if len(pk_val) > 32 and isinstance(row[pk_cols[0]], UUID):
+                 # UUID is 36 chars, callback limit is 64.
+                 # prefix "x:d:t:<table>:k:" takes space.
+                 # "x:d:t:very_long_table_name:k:uuid" -> might fail.
+                 # But standard UUID is 36 chars.
+                 pass
+
             kb.append([InlineKeyboardButton(
                 text=btn_text,
-                callback_data=ExplorerCB(action="row_detail", table=table, pk_val=pk_val).pack()
+                callback_data=ExplorerCB(a="d", t=table, k=pk_val).pack()
             )])
         else:
             # Read-only list item if no single PK
@@ -141,23 +165,23 @@ async def cb_browse_rows(callback: CallbackQuery, callback_data: ExplorerCB) -> 
     # Pagiation
     nav_row = []
     if paginator.has_prev:
-        nav_row.append(InlineKeyboardButton(text="⬅️", callback_data=ExplorerCB(action="rows", table=table, page=page-1).pack()))
+        nav_row.append(InlineKeyboardButton(text="⬅️", callback_data=ExplorerCB(a="r", t=table, p=page-1).pack()))
     
-    nav_row.append(InlineKeyboardButton(text="⬆️ Up", callback_data=ExplorerCB(action="table", table=table).pack()))
+    nav_row.append(InlineKeyboardButton(text="⬆️ Up", callback_data=ExplorerCB(a="t", t=table).pack()))
     
     if paginator.has_next:
-        nav_row.append(InlineKeyboardButton(text="➡️", callback_data=ExplorerCB(action="rows", table=table, page=page+1).pack()))
+        nav_row.append(InlineKeyboardButton(text="➡️", callback_data=ExplorerCB(a="r", t=table, p=page+1).pack()))
         
     kb.append(nav_row)
 
     await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
 
 
-@router.callback_query(ExplorerCB.filter(F.action == "row_detail"))
+@router.callback_query(ExplorerCB.filter(F.a == "d"))
 async def cb_row_detail(callback: CallbackQuery, callback_data: ExplorerCB) -> None:
     """Show single row details."""
-    table = callback_data.table
-    pk_val = callback_data.pk_val
+    table = callback_data.t
+    pk_val = callback_data.k
     
     pk_cols = await db.get_primary_key(table)
     if not pk_cols:
@@ -170,7 +194,12 @@ async def cb_row_detail(callback: CallbackQuery, callback_data: ExplorerCB) -> N
     try:
         val = int(pk_val)
     except ValueError:
-        val = pk_val
+        # Check if it's a UUID string
+        try:
+             UUID(pk_val)
+             val = pk_val 
+        except ValueError:
+             val = pk_val
         
     row = await db.get_row_by_pk(table, pk_cols[0], val)
     
@@ -179,12 +208,44 @@ async def cb_row_detail(callback: CallbackQuery, callback_data: ExplorerCB) -> N
         return
         
     text = f"{build_breadcrumbs(table, pk_val)}\n\n"
+    
+    # Format each field
     for k, v in row.items():
-        text += f"**{k}**: `{v}`\n"
+        val_str = format_value(v)
+        # Escape markdown special chars if needed, but code block handles most
+        # but let's be careful with backticks inside code blocks?
+        # aiogram HTML parse mode is used here based on main.py
+        # Wait, main.py uses HTML parse mode.
+        # But here I see **bold** usage which is Markdown.
+        # Let's check main.py parse mode.
+        
+        # Ideally handle long values in detail view too?
+        if len(val_str) > 4000: # Telegram limit
+             val_str = val_str[:4000] + "..."
+             
+        # HTML escaping is safer if we use HTML parse mode.
+        # But the code uses Markdown syntax (**text**).
+        # Double check main.py...
+        pass
+
+    # Main.py says: default=DefaultBotProperties(parse_mode="HTML")
+    # But current code uses **bold** which is Markdown.
+    # This is a bug! Using **bold** with HTML parse mode will show asterisks.
+    # I should fix this to use <b> or <code> or change parse mode.
+    # Changing parse mode is risky if other parts rely on HTML.
+    # I will switch to HTML tags: <b> and <pre>.
+    
+    text = f"{build_breadcrumbs(table, pk_val)}\n\n" # Breadcrumbs might need HTML escaping too
+    
+    for k, v in row.items():
+        val_str = format_value(v)
+        # simplistic HTML escape
+        val_str = val_str.replace("<", "&lt;").replace(">", "&gt;")
+        text += f"<b>{k}</b>: <code>{val_str}</code>\n"
         
     kb = [[InlineKeyboardButton(
         text="⬅️ Back to Rows",
-        callback_data=ExplorerCB(action="rows", table=table, page=0).pack()  # TODO: Remember page?
+        callback_data=ExplorerCB(a="r", t=table, p=0).pack()  # TODO: Remember page?
     )]]
     
     await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))

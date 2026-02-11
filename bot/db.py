@@ -207,13 +207,9 @@ async def get_rows(
     if sort_by:
         order_clause = f"ORDER BY {_quote_ident(sort_by)}"
     else:
-        # Fallback: try to order by the first column implicitly (usually id)
-        # Or just leave it. Postgres doesn't guarantee order without ORDER BY.
-        # We can fetch PKs here, but it adds overhead. 
-        # Let's trust the caller to provide a sort, or accept unstable sort.
-        # Actually, let's just grab the first column from `get_table_columns` cached?
-        # No, that's too much. Let's just default to nothing for now.
-        pass
+        # Fallback: use CTID for stable pagination if no PK/sort column provided.
+        # This is internal system column, but works for stable paging on heap tables.
+        order_clause = "ORDER BY ctid"
 
     query = f"SELECT * FROM {tbl} {order_clause} LIMIT $1 OFFSET $2"
     return await fetch(query, limit, offset)

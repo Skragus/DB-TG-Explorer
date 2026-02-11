@@ -7,12 +7,19 @@ from typing import Literal
 from aiogram.filters.callback_data import CallbackData
 
 
-class ExplorerCB(CallbackData, prefix="exp"):
-    """Callback data for explorer navigation."""
-    action: Literal["list_tables", "table", "rows", "row_detail"]
-    table: str | None = None
-    page: int = 0
-    pk_val: str | None = None  # Primary key value (stringified)
+class ExplorerCB(CallbackData, prefix="x"):
+    """Callback data for explorer navigation.
+    
+    Short keys to save space (64 bytes limit).
+    a: action (l=list, t=table, r=rows, d=detail)
+    t: table
+    p: page
+    k: pk_val
+    """
+    a: Literal["l", "t", "r", "d"]
+    t: str | None = None
+    p: int = 0
+    k: str | None = None
 
 
 @dataclass(frozen=True)
